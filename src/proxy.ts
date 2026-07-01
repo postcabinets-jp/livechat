@@ -1,7 +1,7 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   let supabaseResponse = NextResponse.next({ request })
 
   const supabase = createServerClient(
@@ -25,9 +25,12 @@ export async function middleware(request: NextRequest) {
     }
   )
 
+  // Use getSession() for optimistic cookie-based check (no network call).
+  // Per Next.js 16 docs, proxy should avoid database/API calls.
+  // Full session validation happens in Server Components via getUser().
   const {
-    data: { user },
-  } = await supabase.auth.getUser()
+    data: { session },
+  } = await supabase.auth.getSession()
 
   const pathname = request.nextUrl.pathname
 
@@ -37,13 +40,13 @@ export async function middleware(request: NextRequest) {
     (route) => pathname === route || pathname.startsWith('/help/') || pathname.startsWith('/w/')
   )
 
-  if (!user && !isPublicRoute) {
+  if (!session && !isPublicRoute) {
     const url = request.nextUrl.clone()
     url.pathname = '/login'
     return NextResponse.redirect(url)
   }
 
-  if (user && (pathname === '/login' || pathname === '/register')) {
+  if (session && (pathname === '/login' || pathname === '/register')) {
     const url = request.nextUrl.clone()
     url.pathname = '/dashboard'
     return NextResponse.redirect(url)
