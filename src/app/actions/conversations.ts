@@ -3,6 +3,13 @@
 import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
 import type { ConversationStatus } from '@/types/database'
+import {
+  getConversationsSchema,
+  getConversationSchema,
+  updateConversationStatusSchema,
+  assignConversationSchema,
+  sendMessageSchema,
+} from '@/lib/validations'
 
 async function getAgentContext() {
   const supabase = await createClient()
@@ -20,6 +27,11 @@ async function getAgentContext() {
 }
 
 export async function getConversations(status?: ConversationStatus) {
+  const parsed = getConversationsSchema.safeParse({ status })
+  if (!parsed.success) {
+    throw new Error(`Invalid input: ${parsed.error.issues.map(i => i.message).join(', ')}`)
+  }
+
   const { supabase, agent } = await getAgentContext()
 
   let query = supabase
@@ -34,8 +46,8 @@ export async function getConversations(status?: ConversationStatus) {
     .eq('organization_id', agent.organization_id)
     .order('updated_at', { ascending: false })
 
-  if (status) {
-    query = query.eq('status', status)
+  if (parsed.data.status) {
+    query = query.eq('status', parsed.data.status)
   }
 
   const { data, error } = await query.limit(50)
@@ -44,6 +56,11 @@ export async function getConversations(status?: ConversationStatus) {
 }
 
 export async function getConversation(id: string) {
+  const parsed = getConversationSchema.safeParse({ id })
+  if (!parsed.success) {
+    throw new Error(`Invalid conversation ID: ${parsed.error.issues.map(i => i.message).join(', ')}`)
+  }
+
   const { supabase, agent } = await getAgentContext()
 
   const { data, error } = await supabase
@@ -56,7 +73,7 @@ export async function getConversation(id: string) {
       messages(*, sender_agent:agents!sender_agent_id(id, display_name, avatar_url)),
       conversation_labels(label_id, labels(id, title, color))
     `)
-    .eq('id', id)
+    .eq('id', parsed.data.id)
     .eq('organization_id', agent.organization_id)
     .single()
 
@@ -65,49 +82,64 @@ export async function getConversation(id: string) {
 }
 
 export async function updateConversationStatus(id: string, status: ConversationStatus) {
+  const parsed = updateConversationStatusSchema.safeParse({ id, status })
+  if (!parsed.success) {
+    throw new Error(`Invalid input: ${parsed.error.issues.map(i => i.message).join(', ')}`)
+  }
+
   const { supabase, agent } = await getAgentContext()
 
-  const updates: Record<string, unknown> = { status }
-  if (status === 'resolved') updates.resolved_at = new Date().toISOString()
-  if (status !== 'resolved') updates.resolved_at = null
+  const updates: Record<string, unknown> = { status: parsed.data.status }
+  if (parsed.data.status === 'resolved') updates.resolved_at = new Date().toISOString()
+  if (parsed.data.status !== 'resolved') updates.resolved_at = null
 
   const { error } = await supabase
     .from('conversations')
     .update(updates)
-    .eq('id', id)
+    .eq('id', parsed.data.id)
     .eq('organization_id', agent.organization_id)
 
   if (error) throw new Error(error.message)
   revalidatePath('/inbox')
-  revalidatePath(`/inbox/${id}`)
+  revalidatePath(`/inbox/${parsed.data.id}`)
 }
 
 export async function assignConversation(conversationId: string, agentId: string | null) {
+  const parsed = assignConversationSchema.safeParse({ conversationId, agentId })
+  if (!parsed.success) {
+    throw new Error(`Invalid input: ${parsed.error.issues.map(i => i.message).join(', ')}`)
+  }
+
   const { supabase, agent } = await getAgentContext()
 
   const { error } = await supabase
     .from('conversations')
-    .update({ assigned_agent_id: agentId })
-    .eq('id', conversationId)
+    .update({ assigned_agent_id: parsed.data.agentId })
+    .eq('id', parsed.data.conversationId)
     .eq('organization_id', agent.organization_id)
 
   if (error) throw new Error(error.message)
   revalidatePath('/inbox')
-  revalidatePath(`/inbox/${conversationId}`)
+  revalidatePath(`/inbox/${parsed.data.conversationId}`)
 }
 
 export async function sendMessage(conversationId: string, content: string, isPrivateNote = false) {
+  const parsed = sendMessageSchema.safeParse({ conversationId, content, isPrivateNote })
+  if (!parsed.success) {
+    throw new Error(`Invalid input: ${parsed.error.issues.map(i => i.message).join(', ')}`)
+  }
+
   const { supabase, agent } = await getAgentContext()
 
   const { error } = await supabase.from('messages').insert({
-    conversation_id: conversationId,
+    conversation_id: parsed.data.conversationId,
     organization_id: agent.organization_id,
     sender_type: 'agent',
     sender_agent_id: agent.id,
     message_type: 'outgoing',
     content_type: 'text',
-    content,
-    is_private_note: isPrivateNote,
+    content: parsed.data.content,
+    is_private_note: parsed.data.isPrivateNote,
   })
 
   if (error) throw new Error(error.message)
@@ -116,21 +148,21 @@ export async function sendMessage(conversationId: string, content: string, isPri
   const { data: conv } = await supabase
     .from('conversations')
     .select('first_reply_at')
-    .eq('id', conversationId)
+    .eq('id', parsed.data.conversationId)
     .single()
 
-  const updates: Record<string, unknown> = { updated_at: new Date().toISOString() }
-  if (!conv?.first_reply_at && !isPrivateNote) {
-    updates.first_reply_at = new Date().toISOString()
-    updates.status = 'open'
+  const convUpdates: Record<string, unknown> = { updated_at: new Date().toISOString() }
+  if (!conv?.first_reply_at && !parsed.data.isPrivateNote) {
+    convUpdates.first_reply_at = new Date().toISOString()
+    convUpdates.status = 'open'
   }
 
   await supabase
     .from('conversations')
-    .update(updates)
-    .eq('id', conversationId)
+    .update(convUpdates)
+    .eq('id', parsed.data.conversationId)
 
-  revalidatePath(`/inbox/${conversationId}`)
+  revalidatePath(`/inbox/${parsed.data.conversationId}`)
 }
 
 export async function getDashboardStats() {

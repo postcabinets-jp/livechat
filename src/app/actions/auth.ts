@@ -3,13 +3,26 @@
 import { revalidatePath } from 'next/cache'
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
+import {
+  loginSchema,
+  registerSchema,
+  forgotPasswordSchema,
+} from '@/lib/validations'
 
 export async function login(formData: FormData) {
-  const supabase = await createClient()
-  const email = formData.get('email') as string
-  const password = formData.get('password') as string
+  const parsed = loginSchema.safeParse({
+    email: formData.get('email'),
+    password: formData.get('password'),
+  })
+  if (!parsed.success) {
+    redirect(`/login?error=${encodeURIComponent(parsed.error.issues.map(i => i.message).join(', '))}`)
+  }
 
-  const { error } = await supabase.auth.signInWithPassword({ email, password })
+  const supabase = await createClient()
+  const { error } = await supabase.auth.signInWithPassword({
+    email: parsed.data.email,
+    password: parsed.data.password,
+  })
   if (error) {
     redirect(`/login?error=${encodeURIComponent(error.message)}`)
   }
@@ -19,17 +32,22 @@ export async function login(formData: FormData) {
 }
 
 export async function register(formData: FormData) {
-  const supabase = await createClient()
-  const email = formData.get('email') as string
-  const password = formData.get('password') as string
-  const orgName = formData.get('org_name') as string
+  const parsed = registerSchema.safeParse({
+    email: formData.get('email'),
+    password: formData.get('password'),
+    org_name: formData.get('org_name'),
+  })
+  if (!parsed.success) {
+    redirect(`/register?error=${encodeURIComponent(parsed.error.issues.map(i => i.message).join(', '))}`)
+  }
 
+  const supabase = await createClient()
   const { data: authData, error: authError } = await supabase.auth.signUp({
-    email,
-    password,
+    email: parsed.data.email,
+    password: parsed.data.password,
     options: {
       emailRedirectTo: `${process.env.NEXT_PUBLIC_APP_URL}/auth/callback`,
-      data: { org_name: orgName },
+      data: { org_name: parsed.data.org_name },
     },
   })
 
@@ -38,6 +56,7 @@ export async function register(formData: FormData) {
   }
 
   if (authData.user) {
+    const orgName = parsed.data.org_name
     const slug = orgName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
     const { data: org, error: orgError } = await supabase
       .from('organizations')
@@ -49,7 +68,7 @@ export async function register(formData: FormData) {
       await supabase.from('agents').insert({
         organization_id: org.id,
         user_id: authData.user.id,
-        display_name: email.split('@')[0],
+        display_name: parsed.data.email.split('@')[0],
         role: 'owner',
         status: 'online',
       })
@@ -75,10 +94,15 @@ export async function logout() {
 }
 
 export async function forgotPassword(formData: FormData) {
-  const supabase = await createClient()
-  const email = formData.get('email') as string
+  const parsed = forgotPasswordSchema.safeParse({
+    email: formData.get('email'),
+  })
+  if (!parsed.success) {
+    redirect(`/forgot-password?error=${encodeURIComponent(parsed.error.issues.map(i => i.message).join(', '))}`)
+  }
 
-  const { error } = await supabase.auth.resetPasswordForEmail(email, {
+  const supabase = await createClient()
+  const { error } = await supabase.auth.resetPasswordForEmail(parsed.data.email, {
     redirectTo: `${process.env.NEXT_PUBLIC_APP_URL}/auth/callback?next=/settings/general`,
   })
 

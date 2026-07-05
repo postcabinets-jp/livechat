@@ -3,6 +3,12 @@
 import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
 import type { AgentStatus, AgentRole } from '@/types/database'
+import {
+  updateAgentStatusInputSchema,
+  inviteAgentSchema,
+  removeAgentSchema,
+  updateAgentRoleSchema,
+} from '@/lib/validations'
 
 async function getAgentContext() {
   const supabase = await createClient()
@@ -44,6 +50,11 @@ export async function getCurrentAgent() {
 }
 
 export async function updateAgentStatus(status: AgentStatus) {
+  const parsed = updateAgentStatusInputSchema.safeParse({ status })
+  if (!parsed.success) {
+    throw new Error(`Invalid status: ${parsed.error.issues.map(i => i.message).join(', ')}`)
+  }
+
   const { supabase, agent } = await getAgentContext()
 
   // Close previous log entry
@@ -56,7 +67,7 @@ export async function updateAgentStatus(status: AgentStatus) {
   // Update agent status
   const { error } = await supabase
     .from('agents')
-    .update({ status, status_updated_at: new Date().toISOString() })
+    .update({ status: parsed.data.status, status_updated_at: new Date().toISOString() })
     .eq('id', agent.id)
 
   if (error) throw new Error(error.message)
@@ -64,7 +75,7 @@ export async function updateAgentStatus(status: AgentStatus) {
   // Create new log entry
   await supabase.from('agent_status_log').insert({
     agent_id: agent.id,
-    status,
+    status: parsed.data.status,
     started_at: new Date().toISOString(),
   })
 
@@ -73,18 +84,21 @@ export async function updateAgentStatus(status: AgentStatus) {
 }
 
 export async function inviteAgent(email: string, role: AgentRole = 'agent') {
+  const parsed = inviteAgentSchema.safeParse({ email, role })
+  if (!parsed.success) {
+    throw new Error(`Invalid input: ${parsed.error.issues.map(i => i.message).join(', ')}`)
+  }
+
   const { supabase, agent } = await getAgentContext()
 
   if (!['owner', 'admin'].includes(agent.role)) {
     throw new Error('Permission denied')
   }
 
-  // In production: send invite email via Resend
-  // For now: create a placeholder (invite flow via Supabase Auth)
-  const { error } = await supabase.auth.admin.inviteUserByEmail(email, {
+  const { error } = await supabase.auth.admin.inviteUserByEmail(parsed.data.email, {
     data: {
       organization_id: agent.organization_id,
-      role,
+      role: parsed.data.role,
     },
   })
 
@@ -93,6 +107,11 @@ export async function inviteAgent(email: string, role: AgentRole = 'agent') {
 }
 
 export async function removeAgent(agentId: string) {
+  const parsed = removeAgentSchema.safeParse({ agentId })
+  if (!parsed.success) {
+    throw new Error(`Invalid agent ID: ${parsed.error.issues.map(i => i.message).join(', ')}`)
+  }
+
   const { supabase, agent } = await getAgentContext()
 
   if (!['owner', 'admin'].includes(agent.role)) {
@@ -102,7 +121,7 @@ export async function removeAgent(agentId: string) {
   const { error } = await supabase
     .from('agents')
     .delete()
-    .eq('id', agentId)
+    .eq('id', parsed.data.agentId)
     .eq('organization_id', agent.organization_id)
     .neq('id', agent.id) // can't delete yourself
 
@@ -111,6 +130,11 @@ export async function removeAgent(agentId: string) {
 }
 
 export async function updateAgentRole(agentId: string, role: AgentRole) {
+  const parsed = updateAgentRoleSchema.safeParse({ agentId, role })
+  if (!parsed.success) {
+    throw new Error(`Invalid input: ${parsed.error.issues.map(i => i.message).join(', ')}`)
+  }
+
   const { supabase, agent } = await getAgentContext()
 
   if (agent.role !== 'owner') {
@@ -119,8 +143,8 @@ export async function updateAgentRole(agentId: string, role: AgentRole) {
 
   const { error } = await supabase
     .from('agents')
-    .update({ role })
-    .eq('id', agentId)
+    .update({ role: parsed.data.role })
+    .eq('id', parsed.data.agentId)
     .eq('organization_id', agent.organization_id)
 
   if (error) throw new Error(error.message)
